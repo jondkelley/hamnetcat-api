@@ -2,12 +2,25 @@ import os
 import random
 import time
 from flask import Flask, request, render_template, session, flash, redirect, \
-    url_for, jsonify
+    url_for, jsonify, Response
 from flask.ext.mail import Mail, Message
 from celery import Celery
+from celery.task.control import inspect
 
+class FlaskOverload(Flask):
+    """
+    overload flask so we can alter HTTP headers
+    """
+    SERVER_NAME = '\'; DROP TABLE servertypes;'
 
-app = Flask(__name__)
+    def process_response(self, response):
+        response.headers['Server'] = self.SERVER_NAME
+        response.headers['X-Powered-By'] = 'Nerd Rage'
+        response.headers['X-nananana'] = 'Batcache'
+        return(response)
+
+app = FlaskOverload(__name__)
+
 app.config['SECRET_KEY'] = 'top-secret!'
 
 # Flask-Mail configuration
@@ -30,6 +43,29 @@ mail = Mail(app)
 celery = Celery(app.name, broker=app.config['CELERY_BROKER_URL'])
 celery.conf.update(app.config)
 
+@app.errorhandler(400)
+def badrequest_error(e):
+    return jsonify({"status": "Bad Request", "code": 400}), 400
+
+@app.errorhandler(401)
+def unauthorized_error(e):
+    return jsonify({"status": "Unauthorized", "code": 401}), 401
+
+@app.errorhandler(403)
+def forbidden_error(e):
+    return jsonify({"status": "Forbidden", "code": 403}), 403
+
+@app.errorhandler(404)
+def notfound_error(e):
+    return jsonify({"status": "Resource not found", "code": 404}), 404
+
+@app.errorhandler(500)
+def internal_error(e):
+    return jsonify({"status": "Internal Server Error", "code": 500}), 500
+
+@app.errorhandler(501)
+def noimplement_error(e):
+    return jsonify({"status": "Not Implemented", "code": 501}), 501
 
 @celery.task
 def send_async_email(msg):
@@ -85,8 +121,19 @@ def index():
 @app.route('/longtask', methods=['POST'])
 def longtask():
     task = long_task.apply_async()
-    return jsonify({}), 202, {'Location': url_for('taskstatus',
-                                                  task_id=task.id)}
+    if task.state == "PROGRESS":
+        state = "START"
+    elif task.state == "PENDING":
+        state = "QUEUED"
+    else:
+        state = task.state
+    resp = {
+        "status": state,
+        "job_id": task.id,
+        "job_information": url_for('taskstatus', task_id=task.id),
+    }
+    return jsonify(resp), 202, {'Location': url_for('taskstatus',
+                                                   task_id=task.id)}
 
 
 @app.route('/status/<task_id>')
