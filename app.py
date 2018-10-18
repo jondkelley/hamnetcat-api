@@ -45,26 +45,32 @@ celery.conf.update(app.config)
 
 @app.errorhandler(400)
 def badrequest_error(e):
+    """Overide html error with json"""
     return jsonify({"status": "Bad Request", "code": 400}), 400
 
 @app.errorhandler(401)
 def unauthorized_error(e):
+    """Overide html error with json"""
     return jsonify({"status": "Unauthorized", "code": 401}), 401
 
 @app.errorhandler(403)
 def forbidden_error(e):
+    """Overide html error with json"""
     return jsonify({"status": "Forbidden", "code": 403}), 403
 
 @app.errorhandler(404)
 def notfound_error(e):
+    """Overide html error with json"""
     return jsonify({"status": "Resource not found", "code": 404}), 404
 
 @app.errorhandler(500)
 def internal_error(e):
+    """Overide html error with json"""
     return jsonify({"status": "Internal Server Error", "code": 500}), 500
 
 @app.errorhandler(501)
 def noimplement_error(e):
+    """Overide html error with json"""
     return jsonify({"status": "Not Implemented", "code": 501}), 501
 
 @celery.task
@@ -73,10 +79,12 @@ def send_async_email(msg):
     with app.app_context():
         mail.send(msg)
 
-
 @celery.task(bind=True)
 def long_task(self):
-    """Background task that runs a long function with progress reports."""
+    """
+    Background worker task that runs a long function with progress reports.
+    These should be broken into their own modules
+    """
     verb = ['Starting up', 'Booting', 'Repairing', 'Loading', 'Checking']
     adjective = ['master', 'radiant', 'silent', 'harmonic', 'fast']
     noun = ['solar array', 'particle reshaper', 'cosmic ray', 'orbiter', 'bit']
@@ -97,6 +105,9 @@ def long_task(self):
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
+    """
+    Web interface exmample
+    """
     if request.method == 'GET':
         return render_template('index.html', email=session.get('email', ''))
     email = request.form['email']
@@ -120,6 +131,9 @@ def index():
 
 @app.route('/longtask', methods=['POST'])
 def longtask():
+    """
+    Spawn long running task, returning a job_id (task.id)
+    """
     task = long_task.apply_async()
     if task.state == "PROGRESS":
         state = "START"
@@ -135,9 +149,11 @@ def longtask():
     return jsonify(resp), 202, {'Location': url_for('taskstatus',
                                                    task_id=task.id)}
 
-
 @app.route('/status/<task_id>')
 def taskstatus(task_id):
+    """
+    Get status of worker event by task ID
+    """
     task = long_task.AsyncResult(task_id)
     if task.state == 'PENDING':
         response = {
@@ -165,6 +181,14 @@ def taskstatus(task_id):
         }
     return jsonify(response)
 
+def startup():
+    """
+    entry point
+    """
+    app.run(debug=True)
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    """
+    its a trap
+    """
+    startup()
