@@ -35,6 +35,7 @@ app.config['MAIL_DEFAULT_SENDER'] = 'flask@example.com'
 # Celery configuration
 app.config['CELERY_BROKER_URL'] = 'redis://localhost:6379/0'
 app.config['CELERY_RESULT_BACKEND'] = 'redis://localhost:6379/0'
+app.config['CELERY_EVENT_QUEUE_TTL'] = 3
 
 
 # Initialize extensions
@@ -172,21 +173,12 @@ def lazylongtask():
 
     sleeps = 0
     while True:
-        sleep(0.1)
+        sleep(0.2)
         sleeps += 1
         taskcbk = long_task.AsyncResult(task.id)
         if taskcbk.state == 'PENDING':
-            if sleeps == 10:
-                # job is blocking
-                return jsonify(jobinfo), 202, {'Location': url_for('taskstatus',
-                                                               task_id=task.id)}
-            pass
+            continue
         elif taskcbk.state != 'FAILURE':
-            if taskcbk.state == "PROGRESS":
-                state = "RUNNING"
-            else:
-                state = taskcbk.state
-
             response = {
                 "state": state,
                 "meta": {
@@ -199,6 +191,16 @@ def lazylongtask():
                     "resource": url_for('taskstatus', task_id=task.id)
                 }
             }
+            if sleeps == 5:
+                # job is blocking
+                return jsonify(response), 202, {'Location': url_for('taskstatus',
+                                                               task_id=task.id)}
+            continue
+            if taskcbk.state == "PROGRESS":
+                state = "RUNNING"
+            else:
+                state = taskcbk.state
+
             if "result" in taskcbk.info:
                 response['result'] = taskcbk.info['result']
 
