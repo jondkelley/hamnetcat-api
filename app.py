@@ -6,6 +6,7 @@ from flask import Flask, request, render_template, session, flash, redirect, \
 from flask.ext.mail import Mail, Message
 from celery import Celery
 from celery.task.control import inspect
+from time import sleep
 
 class FlaskOverload(Flask):
     """
@@ -96,10 +97,10 @@ def long_task(self):
                                               random.choice(adjective),
                                               random.choice(noun))
         self.update_state(state='PROGRESS',
-                          meta={'current': i, 'total': total,
-                                'status': message})
+                          meta={'meta': {'current': i, 'total': total,
+                                'status': message}})
         time.sleep(1)
-    return {'current': 100, 'total': 100, 'status': 'Task completed!',
+    return {'meta': {'current': 100, 'total': 100, 'status': 'Task completed!'},
             'result': 42}
 
 
@@ -132,7 +133,7 @@ def index():
 @app.route('/longtask', methods=['POST'])
 def longtask():
     """
-    Spawn long running task, returning a job_id (task.id)
+    Spawn long running task, returning a result_callback_id (task.id)
     """
     task = long_task.apply_async()
     if task.state == "PROGRESS":
@@ -143,11 +144,76 @@ def longtask():
         state = task.state
     resp = {
         "status": state,
-        "job_id": task.id,
-        "job_information": url_for('taskstatus', task_id=task.id),
+        "callback": {
+            "job_id": task.id,
+            "resource": url_for('taskstatus', task_id=task.id)
+        }
     }
     return jsonify(resp), 202, {'Location': url_for('taskstatus',
                                                    task_id=task.id)}
+
+@app.route('/lazylongtask', methods=['POST'])
+def lazylongtask():
+    """
+    Spawn long running task, returning a result_callback_id (task.id)
+    """
+    task = long_task.apply_async()
+    if task.state == "PROGRESS":
+        state = "START"
+    elif task.state == "PENDING":
+        state = "QUEUED"
+    else:
+        state = task.state
+    jobinfo = {
+        "status": state,
+        "result_callback_id": task.id,
+        "result_callback_resource": url_for('taskstatus', task_id=task.id),
+    }
+
+    sleeps = 0
+    while True:
+        sleep(0.1)
+        sleeps += 1
+        taskcbk = long_task.AsyncResult(task.id)
+        if taskcbk.state == 'PENDING':
+            if sleeps == 10:
+                # job is blocking
+                return jsonify(jobinfo), 202, {'Location': url_for('taskstatus',
+                                                               task_id=task.id)}
+            pass
+        elif taskcbk.state != 'FAILURE':
+            if taskcbk.state == "PROGRESS":
+                state = "RUNNING"
+            else:
+                state = taskcbk.state
+
+            response = {
+                "state": state,
+                "meta": {
+                    "current": taskcbk.info.get('current', 0),
+                    "total": taskcbk.info.get('total', 1)
+                },
+                "status": taskcbk.info.get('status', ''),
+                "callback": {
+                    "job_id": task.id,
+                    "resource": url_for('taskstatus', task_id=task.id)
+                }
+            }
+            if "result" in taskcbk.info:
+                response['result'] = taskcbk.info['result']
+
+            return jsonify(response), 200
+        else:
+            # something went wrong in the background job
+            response = {
+                "state": taskcbk.state,
+                "meta": {
+                    "current": 1,
+                    "total": 1,
+                    "status": str(taskcbk.info),  # this is the exception raised
+                }
+            }
+            return jsonify(response), 500
 
 @app.route('/status/<task_id>')
 def taskstatus(task_id):
@@ -158,15 +224,20 @@ def taskstatus(task_id):
     if task.state == 'PENDING':
         response = {
             'state': task.state,
-            'current': 0,
-            'total': 1,
+            'meta':
+                {
+                'current': 0,
+                'total': 1,
+                },
             'status': 'Pending...'
         }
     elif task.state != 'FAILURE':
         response = {
             'state': task.state,
-            'current': task.info.get('current', 0),
-            'total': task.info.get('total', 1),
+            'meta': {
+                'current': task.info.get('current', 0),
+                'total': task.info.get('total', 1),
+            },
             'status': task.info.get('status', '')
         }
         if 'result' in task.info:
@@ -175,8 +246,10 @@ def taskstatus(task_id):
         # something went wrong in the background job
         response = {
             'state': task.state,
-            'current': 1,
-            'total': 1,
+            'meta': {
+                'current': 1,
+                'total': 1,
+            },
             'status': str(task.info),  # this is the exception raised
         }
     return jsonify(response)
